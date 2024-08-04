@@ -5,9 +5,17 @@ import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
 import org.json.simple.parser.ParseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
+import zerobase.weather.WeatherApplication;
+import zerobase.weather.domain.DateWeather;
 import zerobase.weather.domain.Diary;
+import zerobase.weather.repository.DateWeatherRepository;
 import zerobase.weather.repository.DiaryRepository;
 
 import java.io.BufferedReader;
@@ -21,28 +29,53 @@ import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
+@Transactional
 public class DiaryService {
 
     @Value("${openweathermap.key}")
     private String apiKey;
     private final DiaryRepository diaryRepository;
+    private final DateWeatherRepository dateWeatherRepository;
+    private static final Logger logger = LoggerFactory.getLogger(WeatherApplication.class);
 
-    public void createDiary(LocalDate date, String text) {
 
+    @Transactional
+    @Scheduled(cron = "0 0 1 * * *")
+    public void saveWeatherData() {
+        dateWeatherRepository.save(getWeatherFromApi());
+    }
+
+    private DateWeather getWeatherFromApi() {
         // open weather api에서 json 받아오기
         String weatherString = getWeatherString();
 
         // 받아온 json을 parsing 하기
         Map<String, Object> parsedWeather = parseWeather(weatherString);
+        // dateweather에 정보집어넣기
+        DateWeather dateWeather = new DateWeather();
+        dateWeather.setDate(LocalDate.now());
+        dateWeather.setIcon(parsedWeather.get("icon").toString());
+        dateWeather.setWeather(parsedWeather.get("weather").toString());
+        dateWeather.setTemperature((Double) parsedWeather.get("temp"));
 
-        //파싱된 데이터 + 일기 값 db에 넣기
-        Diary diary = new Diary();
-        diary.setWeather(parsedWeather.get("main").toString());
-        diary.setIcon(parsedWeather.get("icon").toString());
-        diary.setTemperature((Double) parsedWeather.get("temp"));
-        diary.setText(text);
-        diary.setDate(date);
+
+        return dateWeather;
+
+    }
+
+    @Transactional(isolation = Isolation.SERIALIZABLE)
+    public void createDiary(LocalDate date, String text) {
+        logger.info("createDiary");
+
+        DateWeather dateWeather = getWeather(date);
+        Diary diary = Diary.fromDateWeather(dateWeather, text);
+
         diaryRepository.save(diary);
+        logger.info("Diary created");
+    }
+
+    private DateWeather getWeather(LocalDate date) {
+                return dateWeatherRepository.findFirstByDate(date).orElse(getWeatherFromApi());
     }
 
 
@@ -70,6 +103,7 @@ public class DiaryService {
                 response.append(inputLine);
             }
             br.close();
+            System.out.println(response.toString());
             return response.toString();
         } catch (Exception e) {
             return "failed to get response";
@@ -80,8 +114,6 @@ public class DiaryService {
         JSONParser jsonParser = new JSONParser();
         JSONObject jsonObject;
 
-        System.out.println(jsonString);
-
         try {
             jsonObject = (JSONObject) jsonParser.parse(jsonString);
         } catch (ParseException e) {
@@ -89,25 +121,30 @@ public class DiaryService {
         }
         Map<String, Object> resultMap = new HashMap<String, Object>();
 
+
         JSONObject mainData = (JSONObject) jsonObject.get("main");
         resultMap.put("temp", mainData.get("temp"));
 
         JSONArray weatherArray = (JSONArray) jsonObject.get("weather");
+        System.out.println(weatherArray.toString());
 
         JSONObject weatherData = (JSONObject) weatherArray.getFirst();
-        resultMap.put("main", weatherData.get("main"));
+        resultMap.put("weather", weatherData.get("main"));
         resultMap.put("icon", weatherData.get("icon"));
         return resultMap;
 
 
     }
 
+    @Transactional(readOnly = true)
     public List<Diary> readDiary(LocalDate date) {
+        logger.debug("readDiary");
         return diaryRepository.findAllByDate(date);
     }
 
+    @Transactional(readOnly = true)
     public List<Diary> readDiaies(LocalDate startDate, LocalDate endDate) {
-        return diaryRepository.findAllByDateBetween(startDate,endDate);
+        return diaryRepository.findAllByDateBetween(startDate, endDate);
     }
 
     public void update(LocalDate date, String text) {
@@ -117,7 +154,7 @@ public class DiaryService {
     }
 
     public void delete(LocalDate date) {
-        diaryRepository.deleteAllbyDate(date);
+        diaryRepository.deleteAllByDate(date);
 
     }
 }

@@ -16,5 +16,6 @@ public interface DiaryRepository extends JpaRepository<Diary, Integer> {
 
 
     @Transactional // transaction이 없으면 문제가 생긴다? 전체 다이어리를 지워달라고 해도 안지워졌음.
-    void deleteAllbyDate(LocalDate date);
+    void deleteAllByDate(LocalDate date);
 }
+
